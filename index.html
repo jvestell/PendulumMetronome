@@ -296,30 +296,56 @@
 
   function playClick(isOne) {
     const ctx = ac();
-    const t = ctx.currentTime;
+    const t   = ctx.currentTime;
+    const vol = isOne ? 1.0 : 0.62;
 
-    // Woody click: square wave pitch-drop
-    const osc1 = ctx.createOscillator();
-    const g1   = ctx.createGain();
-    osc1.connect(g1); g1.connect(ctx.destination);
-    osc1.type = 'square';
-    osc1.frequency.setValueAtTime(isOne ? 1400 : 900, t);
-    osc1.frequency.exponentialRampToValueAtTime(isOne ? 700 : 450, t + 0.06);
-    g1.gain.setValueAtTime(0, t);
-    g1.gain.linearRampToValueAtTime(isOne ? 0.28 : 0.16, t + 0.003);
-    g1.gain.exponentialRampToValueAtTime(0.001, t + 0.07);
-    osc1.start(t); osc1.stop(t + 0.07);
+    // ── Crack: sharp wideband noise burst (the "slap" of the clapper) ──
+    const frames = Math.ceil(ctx.sampleRate * 0.13);
+    const buf    = ctx.createBuffer(1, frames, ctx.sampleRate);
+    const data   = buf.getChannelData(0);
+    for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
 
-    // High transient for attack crispness
-    const osc2 = ctx.createOscillator();
-    const g2   = ctx.createGain();
-    osc2.connect(g2); g2.connect(ctx.destination);
-    osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(isOne ? 3200 : 2100, t);
-    g2.gain.setValueAtTime(0, t);
-    g2.gain.linearRampToValueAtTime(isOne ? 0.55 : 0.32, t + 0.001);
-    g2.gain.exponentialRampToValueAtTime(0.001, t + 0.018);
-    osc2.start(t); osc2.stop(t + 0.018);
+    const noise = ctx.createBufferSource();
+    noise.buffer = buf;
+
+    // Highpass strips low rumble, bandpass focuses the crack frequency
+    const hp = ctx.createBiquadFilter();
+    hp.type = 'highpass';
+    hp.frequency.value = 1600;
+
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = isOne ? 5500 : 3800;
+    bp.Q.value = 0.6;
+
+    const noiseGain = ctx.createGain();
+    noise.connect(hp);
+    hp.connect(bp);
+    bp.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+
+    // Instantaneous peak then fast exponential tail — the snap
+    noiseGain.gain.setValueAtTime(vol * 3.2, t);
+    noiseGain.gain.exponentialRampToValueAtTime(0.001, t + 0.055);
+
+    noise.start(t);
+    noise.stop(t + 0.13);
+
+    // ── Body: short woody thud underneath the crack ──
+    const body     = ctx.createOscillator();
+    const bodyGain = ctx.createGain();
+    body.connect(bodyGain);
+    bodyGain.connect(ctx.destination);
+
+    body.type = 'triangle';
+    body.frequency.setValueAtTime(isOne ? 210 : 150, t);
+    body.frequency.exponentialRampToValueAtTime(isOne ? 75 : 55, t + 0.07);
+
+    bodyGain.gain.setValueAtTime(vol * 0.55, t);
+    bodyGain.gain.exponentialRampToValueAtTime(0.001, t + 0.08);
+
+    body.start(t);
+    body.stop(t + 0.13);
   }
 
   // ─── Flash wall ──────────────────────────────────────────────────────────

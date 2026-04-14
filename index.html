@@ -247,7 +247,7 @@
     </div>
 
     <!-- Pendulum stage -->
-    <svg id="stage-svg" viewBox="0 0 300 500" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+    <svg id="stage-svg" viewBox="0 0 300 500" preserveAspectRatio="xMidYMid meet" overflow="visible" xmlns="http://www.w3.org/2000/svg">
       <defs>
         <filter id="cell-glow" x="-80%" y="-80%" width="260%" height="260%">
           <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
@@ -331,10 +331,9 @@
   const ROD_LENGTH   = 365;   // SVG units, pivot to bob center
   const BOB_R        = 24;
   const MAX_ANGLE    = 44 * Math.PI / 180; // radians
-  // Fire exactly when the bob's edge first touches the SVG boundary (x=0 or x=300).
-  // bob_x at contact = PIVOT_X ± (SVG_HALF_WIDTH - BOB_R) = 150 ± 126
-  // angle_at_contact = arcsin(126 / ROD_LENGTH); cosVal = angle / MAX_ANGLE
-  const HIT_THRESH   = Math.asin((PIVOT_X - BOB_R) / ROD_LENGTH) / MAX_ANGLE;
+  // Computed dynamically by calibrateHitThresh() from actual rendered layout.
+  // Static fallback fires when bob edge touches SVG viewBox boundary (x=±300).
+  let HIT_THRESH = Math.asin((PIVOT_X - BOB_R) / ROD_LENGTH) / MAX_ANGLE;
 
   // ─── State ───────────────────────────────────────────────────────────────
   let running    = false;
@@ -568,6 +567,41 @@
     }
   });
 
+  // ─── Hit-threshold calibration ───────────────────────────────────────────
+  // With preserveAspectRatio="xMidYMid meet" the SVG content is pillarboxed
+  // inside its flex area on wide screens, creating a gap between the SVG clip
+  // boundary and the actual wall div.  We measure the real wall position via
+  // getBoundingClientRect and compute the exact threshold so the flash fires
+  // the instant the bob's edge visually reaches the brick face.
+  const stageSvgEl = document.getElementById('stage-svg');
+
+  function calibrateHitThresh() {
+    const svgRect   = stageSvgEl.getBoundingClientRect();
+    const rWallRect = rightWall.getBoundingClientRect();
+    const svgW = svgRect.width;
+    const svgH = svgRect.height;
+    if (!svgW || !svgH) return;                   // not laid out yet
+
+    // 'meet' uses a single uniform scale; the shorter dimension wins
+    const scale   = Math.min(svgW / 300, svgH / 500);
+    const offsetX = (svgW - 300 * scale) / 2;     // centering gap in CSS px
+
+    // Right-wall left edge in CSS px, relative to the SVG element's left edge
+    const wallCSSx = rWallRect.left - svgRect.left;
+
+    // Convert to SVG viewBox coordinates
+    const wallSVGx = (wallCSSx - offsetX) / scale;
+
+    // Bob center x (SVG units) when its right edge first touches the wall face
+    const bobX = wallSVGx - BOB_R;
+    const sinA = (bobX - PIVOT_X) / ROD_LENGTH;
+    if (sinA > 0 && sinA < 1) {
+      HIT_THRESH = Math.asin(sinA) / MAX_ANGLE;
+    }
+  }
+
+  window.addEventListener('resize', calibrateHitThresh);
+
   // ─── Note mode buttons ───────────────────────────────────────────────────
   modeBtns.forEach(btn => {
     btn.addEventListener('click', () => applyNoteMode(btn.dataset.mode));
@@ -575,6 +609,7 @@
 
   // ─── Init ────────────────────────────────────────────────────────────────
   applyAngle(MAX_ANGLE);  // rest at right wall position
+  calibrateHitThresh();   // set threshold from real layout (runs after first paint)
 </script>
 </body>
 </html>

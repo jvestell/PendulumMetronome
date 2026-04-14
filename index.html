@@ -205,6 +205,34 @@
     #start-stop:hover { background: #e5c880; }
     #start-stop:active { transform: scale(0.96); }
     #start-stop.running { background: #d95555; color: #fff; }
+
+    /* ── Note mode selector ── */
+    #note-mode-bar {
+      display: flex;
+      border: 1px solid #3a3a52;
+      border-radius: 4px;
+      overflow: hidden;
+      width: 100%;
+      max-width: 380px;
+    }
+
+    .mode-btn {
+      flex: 1;
+      padding: 9px 0;
+      background: #1a1a2e;
+      color: #666;
+      border: none;
+      cursor: pointer;
+      font-family: 'Georgia', serif;
+      font-size: 0.8rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      transition: background 0.15s, color 0.15s;
+    }
+
+    .mode-btn + .mode-btn { border-left: 1px solid #3a3a52; }
+    .mode-btn:hover:not(.active) { background: #252538; color: #aaa; }
+    .mode-btn.active { background: #d4af70; color: #111120; font-weight: bold; }
   </style>
 </head>
 <body>
@@ -220,6 +248,15 @@
 
     <!-- Pendulum stage -->
     <svg id="stage-svg" viewBox="0 0 300 500" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="cell-glow" x="-80%" y="-80%" width="260%" height="260%">
+          <feGaussianBlur in="SourceGraphic" stdDeviation="5" result="blur"/>
+          <feMerge>
+            <feMergeNode in="blur"/>
+            <feMergeNode in="SourceGraphic"/>
+          </feMerge>
+        </filter>
+      </defs>
       <!-- Ceiling mount block -->
       <rect x="120" y="0" width="60" height="35" rx="0" fill="#22223a"/>
       <rect x="138" y="30" width="24" height="22" fill="#2a2a42"/>
@@ -239,6 +276,27 @@
       <!-- Pivot -->
       <circle cx="150" cy="50" r="9" fill="#d4af70" stroke="#e8c980" stroke-width="1.5"/>
       <circle cx="147" cy="47" r="3" fill="rgba(255,255,255,0.4)"/>
+      <!-- Recursive tray: 4 cells, bounce right→left→right -->
+      <g id="recursive-tray">
+        <rect x="26" y="446" width="248" height="42" rx="6" fill="#0a0a18" opacity="0.85"/>
+        <!-- index 0 = leftmost ("3" side), index 3 = rightmost ("1" side) -->
+        <rect id="enote-0" x="38"  y="453" width="22" height="28" rx="3" fill="#151525"/>
+        <rect id="enote-1" x="103" y="453" width="22" height="28" rx="3" fill="#151525"/>
+        <rect id="enote-2" x="168" y="453" width="22" height="28" rx="3" fill="#151525"/>
+        <rect id="enote-3" x="233" y="453" width="22" height="28" rx="3" fill="#151525"/>
+      </g>
+      <!-- Linear tray: 8 cells, steps 0-7 left→right each full cycle -->
+      <g id="linear-tray" display="none">
+        <rect x="3" y="446" width="294" height="42" rx="6" fill="#0a0a18" opacity="0.85"/>
+        <rect id="lnote-0" x="9"   y="453" width="20" height="28" rx="3" fill="#151525"/>
+        <rect id="lnote-1" x="46"  y="453" width="20" height="28" rx="3" fill="#151525"/>
+        <rect id="lnote-2" x="83"  y="453" width="20" height="28" rx="3" fill="#151525"/>
+        <rect id="lnote-3" x="121" y="453" width="20" height="28" rx="3" fill="#151525"/>
+        <rect id="lnote-4" x="158" y="453" width="20" height="28" rx="3" fill="#151525"/>
+        <rect id="lnote-5" x="196" y="453" width="20" height="28" rx="3" fill="#151525"/>
+        <rect id="lnote-6" x="233" y="453" width="20" height="28" rx="3" fill="#151525"/>
+        <rect id="lnote-7" x="271" y="453" width="20" height="28" rx="3" fill="#151525"/>
+      </g>
       <!-- Floor line -->
       <rect x="0" y="490" width="300" height="10" fill="#0d0d20"/>
     </svg>
@@ -259,6 +317,13 @@
     <button id="start-stop">START</button>
   </div>
 
+  <!-- Note mode selector -->
+  <div id="note-mode-bar">
+    <button class="mode-btn active" data-mode="recursive">Recursive</button>
+    <button class="mode-btn" data-mode="linear">Linear</button>
+    <button class="mode-btn" data-mode="none">None</button>
+  </div>
+
 <script>
   // ─── Constants ───────────────────────────────────────────────────────────
   const PIVOT_X      = 150;
@@ -266,7 +331,10 @@
   const ROD_LENGTH   = 365;   // SVG units, pivot to bob center
   const BOB_R        = 24;
   const MAX_ANGLE    = 44 * Math.PI / 180; // radians
-  const HIT_THRESH   = 0.96;  // cos value near ±1 that triggers a beat
+  // Fire exactly when the bob's edge first touches the SVG boundary (x=0 or x=300).
+  // bob_x at contact = PIVOT_X ± (SVG_HALF_WIDTH - BOB_R) = 150 ± 126
+  // angle_at_contact = arcsin(126 / ROD_LENGTH); cosVal = angle / MAX_ANGLE
+  const HIT_THRESH   = Math.asin((PIVOT_X - BOB_R) / ROD_LENGTH) / MAX_ANGLE;
 
   // ─── State ───────────────────────────────────────────────────────────────
   let running    = false;
@@ -275,6 +343,7 @@
   let animFrame  = null;
   let lastSide   = null;   // 'right' | 'left' — debounce clicks
   let audioCtx   = null;
+  let noteMode   = 'recursive';  // 'recursive' | 'linear' | 'none'
 
   // ─── DOM refs ────────────────────────────────────────────────────────────
   const rod        = document.getElementById('rod');
@@ -287,6 +356,11 @@
   const bpmDisplay = document.getElementById('bpm-display');
   const bpmSlider  = document.getElementById('bpm-slider');
   const startBtn   = document.getElementById('start-stop');
+  const enoteCells  = [0, 1, 2, 3].map(i => document.getElementById('enote-' + i));
+  const lnoteCells  = [0, 1, 2, 3, 4, 5, 6, 7].map(i => document.getElementById('lnote-' + i));
+  const recursiveTray = document.getElementById('recursive-tray');
+  const linearTray    = document.getElementById('linear-tray');
+  const modeBtns      = document.querySelectorAll('.mode-btn');
 
   // ─── Audio ───────────────────────────────────────────────────────────────
   function ac() {
@@ -348,6 +422,54 @@
     body.stop(t + 0.13);
   }
 
+  // ─── Eighth-note cells ───────────────────────────────────────────────────
+  function updateEighthnotes(activeIdx) {
+    enoteCells.forEach((cell, i) => {
+      if (i === activeIdx) {
+        cell.setAttribute('fill', '#d4af70');
+        cell.setAttribute('filter', 'url(#cell-glow)');
+      } else {
+        cell.setAttribute('fill', '#151525');
+        cell.removeAttribute('filter');
+      }
+    });
+  }
+
+  function resetEighthnotes() {
+    enoteCells.forEach(cell => {
+      cell.setAttribute('fill', '#151525');
+      cell.removeAttribute('filter');
+    });
+  }
+
+  function updateLinear(step) {
+    lnoteCells.forEach((cell, i) => {
+      if (i === step) {
+        cell.setAttribute('fill', '#d4af70');
+        cell.setAttribute('filter', 'url(#cell-glow)');
+      } else {
+        cell.setAttribute('fill', '#151525');
+        cell.removeAttribute('filter');
+      }
+    });
+  }
+
+  function resetLinear() {
+    lnoteCells.forEach(cell => {
+      cell.setAttribute('fill', '#151525');
+      cell.removeAttribute('filter');
+    });
+  }
+
+  function applyNoteMode(mode) {
+    noteMode = mode;
+    recursiveTray.setAttribute('display', mode === 'recursive' ? '' : 'none');
+    linearTray.setAttribute('display',    mode === 'linear'    ? '' : 'none');
+    resetEighthnotes();
+    resetLinear();
+    modeBtns.forEach(b => b.classList.toggle('active', b.dataset.mode === mode));
+  }
+
   // ─── Flash wall ──────────────────────────────────────────────────────────
   let flashTimer = { left: null, right: null };
 
@@ -391,6 +513,16 @@
 
     applyAngle(angle);
 
+    // Eighth-note cell tracking
+    const step = Math.floor(phase * 8);
+    if (noteMode === 'recursive') {
+      // bounce: right→left (cell 3→0) then left→right (cell 0→3)
+      updateEighthnotes(step < 4 ? (3 - step) : (step - 4));
+    } else if (noteMode === 'linear') {
+      // straight left→right through all 8 cells each cycle
+      updateLinear(step);
+    }
+
     // Beat detection — fire once per wall approach
     if (cosVal > HIT_THRESH && lastSide !== 'right') {
       lastSide = 'right';
@@ -431,7 +563,14 @@
       startBtn.textContent = 'START';
       startBtn.classList.remove('running');
       applyAngle(0);  // park at center
+      resetEighthnotes();
+      resetLinear();
     }
+  });
+
+  // ─── Note mode buttons ───────────────────────────────────────────────────
+  modeBtns.forEach(btn => {
+    btn.addEventListener('click', () => applyNoteMode(btn.dataset.mode));
   });
 
   // ─── Init ────────────────────────────────────────────────────────────────
